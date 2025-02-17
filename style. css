@@ -1,0 +1,6 @@
+*{
+text+align:center;
+margin:auto;
+padding:auto;
+boder-redious:1px,solid black;
+}
