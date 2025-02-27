@@ -1,1 +1,74 @@
-aap
+import { generateCode } from "./backend/generate-code";
+import { createTables } from "./database/migrations";
+import { createProject, getCode, getNextVersionNumber, insertVersion } from "./database/queries";
+
+async function servePublicFile(path: string): Promise<Response> {
+  const url = new URL("./public/" + path, import.meta.url);
+  const text = await (await fetch(url, {
+    headers: {
+      "User-Agent": "", // to transpile TS to JS
+    },
+  })).text();
+  const contentType = path.endsWith(".html") ? "text/html" : "text/javascript";
+  return new Response(text, {
+    headers: {
+      "Content-Type": contentType,
+    },
+  });
+}
+
+await createTables();
+
+export default async function cerebras_coder(req: Request): Promise<Response> {
+  if (req.method === "POST") {
+    let { prompt, currentCode, versionHistory, projectId } = await req.json();
+
+    const { code, time, totalTokens } = await generateCode(prompt, currentCode);
+
+    // If no version history exists, create a new project
+    let versionNumber = 0;
+    if (!projectId) {
+      projectId = await createProject(prompt);
+    } else {
+      // get last version number for this project id
+      versionNumber = await getNextVersionNumber(projectId);
+    }
+
+    await insertVersion(projectId, versionNumber, prompt, code);
+
+    return new Response(
+      JSON.stringify({
+        code,
+        projectId,
+        versionNumber,
+        performance: {
+          tokensPerSecond: totalTokens / time,
+          totalTokens,
+          time,
+        },
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  // output url in format /p/:project/v/:version
+  const url = new URL(req.url);
+  if (url.pathname.startsWith("/p/")) {
+    const [, , project, , version] = url.pathname.split("/");
+    const code = await getCode(project, version);
+    if (!code) {
+      return new Response("Not found", { status: 404 });
+    }
+    return new Response(code as string, {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  if (url.pathname.startsWith("/public/")) {
+    return servePublicFile(url.pathname.replace("/public/", "./"));
+  }
+
+  return servePublicFile("index.html");
+}
